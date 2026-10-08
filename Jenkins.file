@@ -1,0 +1,96 @@
+jenkinsfile_content = '''pipeline {
+    agent any
+
+    environment {
+        KAGGLE_USERNAME  = credentials('kaggle-username')
+        KAGGLE_KEY       = credentials('kaggle-key')
+        NGROK_AUTH_TOKEN = credentials('ngrok-token')
+        API_URL          = "http://localhost:5000"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/TU_USUARIO/bigdata-geoespacial.git'
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh 'pip install --upgrade pip'
+                sh 'pip install -r requirements.txt'
+            }
+        }
+
+        stage('Lint') {
+            steps {
+                sh 'python -m py_compile src/api.py'
+            }
+        }
+
+        stage('Unit Tests (pytest)') {
+            steps {
+                sh 'pytest tests/ -v --junitxml=results.xml'
+            }
+            post {
+                always {
+                    junit 'results.xml'
+                }
+            }
+        }
+
+        stage('Start Services') {
+            steps {
+                sh \'\'\'
+                    mkdir -p mongodb_data mongodb_logs
+                    mongod --dbpath mongodb_data \\
+                           --logpath mongodb_logs/mongod.log \\
+                           --port 27017 \\
+                           --bind_ip 127.0.0.1 \\
+                           --fork || true
+                \'\'\'
+                sh 'nohup python src/api.py > api.log 2>&1 &'
+                sh 'sleep 10'
+            }
+        }
+
+        stage('API Smoke Tests') {
+            steps {
+                sh 'pytest tests/test_api.py::test_health -v'
+                sh 'pytest tests/test_api.py::test_near_valid -v'
+            }
+        }
+
+        stage('Deploy') {
+            when {
+                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
+            }
+            steps {
+                echo 'Desplegando aplicacion...'
+                echo 'Despliegue completado.'
+            }
+        }
+    }
+
+    post {
+        failure {
+            echo 'Pipeline fallo. Despliegue bloqueado.'
+        }
+        success {
+            echo 'Pipeline exitoso. Servicios desplegados.'
+        }
+        always {
+            archiveArtifacts artifacts: 'api.log', allowEmptyArchive: true
+        }
+    }
+}
+'''
+
+with open('/content/Jenkinsfile', 'w') as f:
+    f.write(jenkinsfile_content)
+
+from google.colab import files
+files.download('/content/Jenkinsfile')
+print("✅ Archivo Jenkinsfile descargado")
